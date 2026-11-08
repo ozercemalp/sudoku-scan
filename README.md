@@ -1,68 +1,58 @@
 # SudokuScan
 
-### Install Python dependencies
+COMP 482 Computer Vision project for reading printed Sudoku givens from a photo.
 
-Make sure Python 3.10+ is installed:
+## Setup
 
-```bash
-python3 --version
-```
-
-On Ubuntu/Debian, install virtual environment support if needed:
-
-```bash
-sudo apt-get update
-sudo apt-get install python3-venv
-```
-
-Create and activate a virtual environment:
+Use Python 3.10 or newer.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-Install the required Python packages:
+On Windows use `python` instead of `python3` and activate with
+`.venv\Scripts\Activate.ps1` in PowerShell.
 
-```bash
-python -m pip install -r requirements.txt
-```
+## Tesseract
 
-### Install Tesseract OCR
-
-Tesseract must be installed separately from the Python dependencies.
-
-**Ubuntu/Debian**
+Ubuntu/Debian
 
 ```bash
 sudo apt-get update
 sudo apt-get install tesseract-ocr tesseract-ocr-eng
 ```
 
-**Fedora**
+macOS
 
 ```bash
-sudo dnf install tesseract tesseract-langpack-eng
+brew install tesseract
 ```
 
-**Arch Linux**
+Windows
+
+Install [Tesseract from UB-Mannheim](https://github.com/UB-Mannheim/tesseract/wiki)
+and add its installation folder to `PATH`.
+
+## Run
+
+Single image
 
 ```bash
-sudo pacman -S tesseract tesseract-data-eng
+python sudoku_scan.py --input data/personal/images/personal_01.jpg --outdir out
 ```
 
-### Verify the installation
-
-Check that Tesseract is installed:
+Batch with affine and homography OCR comparisons
 
 ```bash
-tesseract --version
+python sudoku_scan.py --batch data/personal/images --outdir results/personal --compare
 ```
 
-Verify that English language data is available:
+## Test and evaluate
 
 ```bash
-tesseract --list-langs
+pip install pytest
+python -m pytest
+python evaluate.py --annotations data/personal/annotations --results results/personal --outdir results/personal_metrics
 ```
-
-The output should include `eng`.
