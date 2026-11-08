@@ -2,7 +2,6 @@
 
 
 def validate_grid(grid):
-    # check 9x9 shape and integers 0-9 where 0 means empty
     if len(grid) != 9:
         raise ValueError('expected nine rows')
     for row in grid:
@@ -14,7 +13,6 @@ def validate_grid(grid):
         units.append([(row, column) for column in range(9)])
     for column in range(9):
         units.append([(row, column) for row in range(9)])
-    # step by 3 to get the start of each box
     for box_row in range(0, 9, 3):
         for box_column in range(0, 9, 3):
             cells = []
@@ -34,7 +32,6 @@ def validate_grid(grid):
             if len(matches) > 1:
                 # include all cells with this digit even the first one
                 conflicts.update(matches)
-    # just checking the givens here no solving
     verdict = 'invalid' if conflicts else 'valid'
     # sort so the cell order stays the same between runs
     return verdict, [list(cell) for cell in sorted(conflicts)]

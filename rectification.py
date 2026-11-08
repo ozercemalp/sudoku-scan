@@ -8,55 +8,52 @@ import numpy as np
 from preprocessing import map_points
 
 
-# A 450x450 image gives 50x50 pixels per cell in a 9x9 grid.
+# 450x450 gives 50x50 pixels per cell for the 9x9 grid
 TARGET_SIZE = 450
 
 
 def rectify(image, corners):
-    # Both corner lists use the order TL, TR, BR, BL.
+    # both lists use TL TR BR BL order
     corners = np.array(corners, dtype=np.float32).reshape(4, 2)
     size = TARGET_SIZE
+    # corner targets use 450 while the saved pixels run from 0 to 449
     target = np.float32([[0, 0], [size, 0], [size, size], [0, size]])
-    # A3 fits TL, TR and BL exactly, leaving BR as a check on the affine model.
-    # Affine maps preserve parallel lines, so they cannot fully undo perspective.
+    # A3 fits TL TR and BL exactly then we check where BR ends up
+    # affine maps keep lines parallel so they cant fully undo perspective
     matrix_a3 = cv2.getAffineTransform(corners[[0, 1, 3]], target[[0, 1, 3]])
-    # A4 fits all four corners by least squares, sharing the error between them.
-    # Keep every observation. RANSAC's usual threshold can discard the fourth
-    # corner even though the purpose here is to measure the affine fit error.
-    # The large threshold keeps all four points for the least-squares refinement.
+    # A4 shares the fitting error across all 4 corners using least squares
+    # huge RANSAC threshold keeps all 4 points for the least squares refinement
     matrix_a4, inliers = cv2.estimateAffine2D(
         corners, target, method=cv2.RANSAC, ransacReprojThreshold=1e8,
         maxIters=1, confidence=0.99, refineIters=10,
     )
     if matrix_a4 is None or not np.all(inliers):
         raise ValueError('A4 could not fit all four corners')
-    # H4 uses four pairs to fit a homography, which can undo perspective distortion.
-    # Compare it with A3 and A4 to see when an affine approximation is enough.
+    # H4 fits all 4 corners and can undo perspective too
     matrix_h4 = cv2.getPerspectiveTransform(corners, target)
     matrices = {'A3': matrix_a3, 'A4': matrix_a4, 'H4': matrix_h4}
     images = {}
     for name, matrix in matrices.items():
-        # Homographies need a projective warp; white fills pixels outside the photo.
         if name == 'H4':
             images[name] = cv2.warpPerspective(image, matrix, (size, size), borderValue=(255, 255, 255))
         else:
             images[name] = cv2.warpAffine(image, matrix, (size, size), borderValue=(255, 255, 255))
 
-    # Add a homogeneous row so map_points can also use the 2x3 affine matrices.
+    # extra row lets map_points work with the affine matrices too
     affine_a3 = np.vstack([matrix_a3, [0, 0, 1]])
     affine_a4 = np.vstack([matrix_a4, [0, 0, 1]])
     mapped_a3 = map_points(corners, affine_a3)
     mapped_a4 = map_points(corners, affine_a4)
     mapped_h4 = map_points(corners, matrix_h4)
-    # All residuals below measure distances in the rectified image's pixels.
+    # errors are measured in target image pixels
     residuals = {
-        # Where A3 sends the unused BR corner, ideally (450, 450).
+        # where A3 places BR which wasnt used in the fit
         'a3_br_target': mapped_a3[2].tolist(),
-        # Distance from that BR prediction to its ideal target position.
+        # distance from BR to its target at 450 450
         'a3_corner_err_px': float(np.linalg.norm(mapped_a3[2] - target[2])),
-        # Root mean squared distance over all four corners for the A4 fit.
+        # RMS distance of all 4 corners from their targets
         'a4_rms_px': float(np.sqrt(np.mean(np.sum((mapped_a4 - target) ** 2, axis=1)))),
-        # Largest H4 corner error; it should be near zero apart from rounding.
+        # largest H4 corner error should be almost zero
         'h4_max_corner_err_px': float(np.linalg.norm(mapped_h4 - target, axis=1).max()),
     }
     return images, matrices, residuals
@@ -83,7 +80,7 @@ if __name__ == '__main__':
     selected, candidates = find_corners(prepared)
     if selected is None:
         parser.exit(1, 'no puzzle found\n')
-    # Map detected corners back before warping the original-resolution photo.
+    # map corners back before warping the original photo
     corners = map_points(selected['corners'], prepared['to_original'])
     images, matrices, residuals = rectify(prepared['image'], corners)
     save_rectifications(args.outdir, args.input.stem, images)

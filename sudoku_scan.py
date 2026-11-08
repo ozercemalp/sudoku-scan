@@ -147,7 +147,6 @@ def process_image(path, outdir, compare=False):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    # choose either one photo or a batch folder
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument('--input', type=Path)
     source.add_argument('--batch', type=Path)
@@ -163,7 +162,6 @@ def main(argv=None):
     else:
         if not args.batch.is_dir():
             parser.error('--batch must name an existing directory')
-        # sort files so each batch runs in the same order
         images = sorted(path for path in args.batch.iterdir()
                         if path.is_file() and path.suffix.lower() in ('.jpg', '.jpeg', '.png'))
         if not images:

@@ -23,24 +23,23 @@ def line_measurements(image):
     size = len(gray)
     cell_size = size / 9
     for name, axis in (('vertical', 0), ('horizontal', 1)):
-        # Average along each line so grid lines show up as peaks in the profile
+        # row and column averages make grid lines show up as peaks
         profile = thresh.mean(axis=axis) / 255
         positions, errors, straightness = [], [], []
-        # Look near all 10 expected lines spaced 50 pixels apart on a 450px grid
+        # look near the 10 expected lines every 50 pixels on a 450px grid
         for ideal in np.linspace(0, size, 10):
             left = max(0, int(ideal - cell_size * 0.3))
             right = min(size, int(ideal + cell_size * 0.3) + 1)
             search_profile = profile[left:right]
             peak = left + int(np.argmax(search_profile))
-            # Below 25% ink coverage treat it as missing and use a half-cell penalty
+            # below 25% ink coverage count the line as missing with a half cell penalty
             if profile[peak] < 0.25:
                 positions.append(None)
                 errors.append(cell_size / 2)
                 continue
             positions.append(peak)
             errors.append(peak - ideal)
-            # Split the line into 6 sections and compare their peaks with the full line
-            # This measures how much the line position varies along its length
+            # check peaks in 6 sections to see how much the line position changes
             for segment in np.array_split(thresh, 6, axis=axis):
                 segment_profile = segment.mean(axis=axis)
                 local_peak = left + int(np.argmax(segment_profile[left:right]))
@@ -87,7 +86,7 @@ def summarize(rows):
         if row['runtime_s'] is not None:
             runtimes.append(row['runtime_s'])
 
-    # Accuracy includes missing detections as zero but corner error needs a detection
+    # missing detections get zero accuracy but only detected corners have an error
     total_accuracy = sum(cell_accuracies)
     denominator = 2 * true_positive + false_positive + false_negative
     return {
@@ -142,7 +141,8 @@ def evaluate(annotations, results, outdir):
         if detected:
             row['cell_accuracy'] = float(np.mean(grid == target))
             row['exact_match'] = bool(np.array_equal(grid, target))
-            # Empty is the positive class for the empty-cell F1 score
+            # empty is the positive class for this F1 score
+            # use the final OCR grid here so unread digits count as empty
             true_empty = target == 0
             predicted_empty = grid == 0
             row['empty_tp'] = int(np.sum(true_empty & predicted_empty))
@@ -155,15 +155,15 @@ def evaluate(annotations, results, outdir):
             corner_distances = np.linalg.norm(corners - true_corners, axis=1)
             row['corner_error_pct'] = float(corner_distances.mean() / mean_side_length * 100)
 
-            # The PDF suggests opposite side ratios as a measure of obliqueness
-            # Roll pairs each corner with the previous one to get the four edges
+            # use opposite side ratios for obliqueness as suggested in the PDF
+            # roll pairs each corner with the previous one to get the edges
             edges = corners - np.roll(corners, 1, axis=0)
             sides = np.linalg.norm(edges, axis=1)
             left_to_right = sides[0] / sides[2]
             right_to_left = sides[2] / sides[0]
             top_to_bottom = sides[1] / sides[3]
             bottom_to_top = sides[3] / sides[1]
-            # Use both directions so the ratio is at least 1 and grows with unequal sides
+            # use both directions so the ratio starts at 1 and grows with unequal sides
             opposite_side_ratios = (left_to_right, right_to_left, top_to_bottom, bottom_to_top)
             row['obliqueness'] = float(max(opposite_side_ratios))
             for key in ('a3_corner_err_px', 'a4_rms_px', 'h4_max_corner_err_px'):
@@ -205,6 +205,7 @@ def evaluate(annotations, results, outdir):
                 condition_rows.append(row)
         summary['by_condition'][condition] = summarize(condition_rows)
     summary['models'] = {}
+    # missing model predictions still count as zero in the all image average
     for model in ('A3', 'A4', 'H4'):
         accuracies = []
         for row in rows:
@@ -212,6 +213,7 @@ def evaluate(annotations, results, outdir):
             accuracy = model_metrics.get('cell_accuracy')
             accuracies.append(accuracy if accuracy is not None else 0.0)
         summary['models'][model] = {'cell_accuracy_all_images': float(np.mean(accuracies))}
+    # compare preparation only on images that have both results
     raw_accuracies = []
     prepared_accuracies = []
     for row in rows:
@@ -275,12 +277,12 @@ def save_plots(rows, results, outdir):
             line_errors.append(float(np.mean(position_errors)) if position_errors else np.nan)
             accuracy = measurements['cell_accuracy']
             accuracies.append(accuracy * 100 if accuracy is not None else np.nan)
-        # Left compares A3 unused-corner error A4 RMS error and H4 maximum error
+        # left shows A3 BR error A4 RMS error and the largest H4 corner error
         axes[0].plot(obliqueness_values, corner_errors, 'o-', label=model)
-        # Middle averages grid position RMSE over horizontal and vertical lines
-        # Spacing and segment straightness are saved separately in the JSON
+        # middle averages horizontal and vertical grid position RMSE
+        # spacing and segment straightness are saved separately in the JSON
         axes[1].plot(obliqueness_values, line_errors, 'o-', label=model)
-        # Right compares OCR cell accuracy for each warp against the same truth grid
+        # right shows OCR cell accuracy for each warp against the same truth grid
         axes[2].plot(obliqueness_values, accuracies, 'o-', label=model)
     titles = ('Corner residual (px)', 'Grid position RMSE (px)', 'Cell accuracy (%)')
     for axis, title in zip(axes, titles):
@@ -290,7 +292,7 @@ def save_plots(rows, results, outdir):
     figure.tight_layout()
     figure.savefig(outdir / 'affine_vs_homography.png', dpi=150)
     plt.close(figure)
-    # The largest opposite side ratio picks the most oblique example for the report
+    # use the photo with the largest side ratio for the report comparison
     name = Path(detected[-1]['image']).stem
     panels = []
     for model in ('A3', 'A4', 'H4'):
