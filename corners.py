@@ -10,6 +10,7 @@ from preprocessing import make_threshold, map_points, preprocess
 
 def harris_peaks(gray, block_size=None, ksize=3, k=0.04, threshold=0.01):
     if block_size is None:
+        # Scale the corner neighbourhood to 0.4% of the shorter image side.
         block_size = max(3, round(min(gray.shape) * 0.004))
         if block_size % 2 == 0:
             block_size += 1
@@ -17,8 +18,10 @@ def harris_peaks(gray, block_size=None, ksize=3, k=0.04, threshold=0.01):
     maximum = float(response.max())
     if maximum <= 0:
         return response, np.empty((0, 2))
+    # Merge nearby peaks within 0.6% of the image size to avoid duplicate corners.
     radius = max(2, round(min(gray.shape) * 0.006))
     local_max = cv2.dilate(response, np.ones((2 * radius + 1, 2 * radius + 1), np.uint8))
+    # Keep local peaks above 1% of the strongest response by default.
     ys, xs = np.nonzero((response > threshold * maximum) & (response == local_max))
     order = np.argsort(response[ys, xs])[::-1]
     suppressed = np.zeros(gray.shape, bool)
@@ -57,27 +60,35 @@ def detect_candidates(gray, thresh, **parameters):
 def order_corners(points):
     points = np.array(points, dtype=np.float32).reshape(4, 2)
     centre = points.mean(axis=0)
+    # Sort by angle around the centre so the corners follow the boundary.
     angles = np.arctan2(points[:, 1] - centre[1], points[:, 0] - centre[0])
     points = points[np.argsort(angles)]
+    # The smallest x+y estimates the top-left corner; roll puts it first.
     start = int(np.argmin(points[:, 0] + points[:, 1]))
     return np.roll(points, -start, axis=0)
 
 
 def grid_score(thresh, corners):
+    # A 360-pixel square gives nine 40-pixel cells for checking grid spacing.
     target = np.float32([[0, 0], [360, 0], [360, 360], [0, 360]])
     matrix = cv2.getPerspectiveTransform(corners.astype(np.float32), target)
     square = cv2.warpPerspective(thresh, matrix, (360, 360), flags=cv2.INTER_NEAREST)
     strengths = []
     for axis in (0, 1):
+        # Row and column averages show how much white grid ink crosses each line.
         profile = square.mean(axis=axis) / 255
         peaks = []
+        # Look within 9 pixels of each expected internal line to allow small errors.
         for position in range(40, 360, 40):
             peaks.append(float(profile[position - 9:position + 10].max()))
         strengths.append(np.array(peaks))
     horizontal, vertical = strengths
     average = (horizontal.mean() + vertical.mean()) / 2
+    # Count lines with over 40% ink coverage, using the weaker grid direction.
     coverage = min(np.mean(horizontal > 0.40), np.mean(vertical > 0.40))
+    # The lower quartile checks that the score is not carried by a few strong lines.
     weak_lines = min(np.quantile(horizontal, 0.25), np.quantile(vertical, 0.25))
+    # Reward average line strength, then coverage and support from weaker lines.
     return float(average + 0.5 * coverage + 0.25 * weak_lines)
 
 
@@ -91,33 +102,43 @@ def select_corners(gray, thresh, candidates):
     contours = sorted(list(contours) + list(more_contours), key=cv2.contourArea, reverse=True)[:180]
     best_corners = None
     best_indices = None
+    # Require a grid score above 0.85 to reject weak matches; it is not a probability.
     best_score = 0.85
     seen = set()
     for contour in contours:
+        # Ignore regions below 1.2% of the image area, such as small text or digits.
         if cv2.contourArea(contour) < thresh.size * 0.012:
             continue
         perimeter = cv2.arcLength(contour, True)
+        # Try several simplification tolerances relative to the contour perimeter.
         for fraction in (0.015, 0.025, 0.045):
             polygon = cv2.approxPolyDP(contour, fraction * perimeter, True)
             if len(polygon) != 4 or not cv2.isContourConvex(polygon):
                 continue
             proposal = order_corners(polygon)
+            # Roll pairs each corner with the previous one, including the closing edge.
+            # The norm of each difference gives the four edge lengths.
             sides = np.linalg.norm(proposal - np.roll(proposal, 1, axis=0), axis=1)
+            # Reject edges below 8% of the image size and very thin quadrilaterals.
+            # The 0.18 shortest/longest ratio still allows strong perspective distortion.
             if sides.min() < min(thresh.shape) * 0.08 or sides.min() / sides.max() < 0.18:
                 continue
             indices = []
             distances = []
             for vertex in proposal:
+                # Measure each Harris point's distance to this proposed corner.
                 distance = np.linalg.norm(points - vertex, axis=1)
                 index = int(np.argmin(distance))
                 indices.append(index)
                 distances.append(distance[index])
+            # Use four different peaks, each within 3.5% of the mean edge length.
+            # A 5-pixel minimum tolerance allows small contour offsets on small grids.
             if len(set(indices)) != 4 or max(distances) > max(5, sides.mean() * 0.035):
                 continue
             if tuple(indices) in seen:
                 continue
             seen.add(tuple(indices))
-            # Contours locate regions only. All four coordinates come from Harris.
+            # The contour suggests where to look, use Harris points for the corners.
             snapped = points[indices].astype(np.float32)
             if not cv2.isContourConvex(snapped.reshape(4, 1, 2)):
                 continue
@@ -131,6 +152,7 @@ def select_corners(gray, thresh, candidates):
         (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER, 30, 0.01),
     ).reshape(4, 2)
     for index in range(4):
+        # Keep refinement close to its Harris peak rather than a neighbouring feature.
         if np.linalg.norm(refined[index] - best_corners[index]) <= 6:
             best_corners[index] = refined[index]
     return {'corners': best_corners, 'indices': best_indices, 'score': best_score}
