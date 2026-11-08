@@ -32,6 +32,8 @@ def orientation_matrix(orientation, width, height):
 
 
 def make_threshold(gray, block_size, constant=7):
+    # Subtracting 7 from the local mean rejects small background variations.
+    # Gaussian weighting favours nearby pixels, inversion makes dark lines white.
     return cv2.adaptiveThreshold(
         gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY_INV, block_size, constant,
@@ -39,6 +41,8 @@ def make_threshold(gray, block_size, constant=7):
 
 
 def preprocess(path, max_side=1600):
+    # Cap the longest side at 1600 to limit runtime while keeping grid detail.
+    # Reject tiny inputs that leave too little room for local filtering.
     if max_side < 32:
         raise ValueError('max_side must be at least 32')
     with Image.open(path) as photo:
@@ -50,22 +54,32 @@ def preprocess(path, max_side=1600):
         raise ValueError('photo is too small')
 
     upright_height, upright_width = upright.shape[:2]
+    # We downscale, 1.0 avoids enlarging inputs.
     scale = min(1.0, max_side / max(upright_width, upright_height))
     new_width = max(3, round(upright_width * scale))
     new_height = max(3, round(upright_height * scale))
     resized = cv2.resize(upright, (new_width, new_height), interpolation=cv2.INTER_AREA)
     gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
     short_side = min(gray.shape)
+    # Scale kernels with image size.
+    # A small 0.2% blur reduces noise without heavily smoothing grid edges.
     blur_size = max(3, round(short_side * 0.002))
+    # Use odd sizes of at least 3 for centred filtering neighbourhoods.
     if blur_size % 2 == 0:
         blur_size += 1
+    # A 3.5% window adapts the threshold to local lighting around each pixel.
     block_size = max(3, round(short_side * 0.035))
     if block_size % 2 == 0:
         block_size += 1
+    # Keep the threshold window within the image's shorter dimension.
     block_size = min(block_size, short_side if short_side % 2 else short_side - 1)
+    # Sigma 0 lets OpenCV choose the smoothing strength from the kernel size.
     gray = cv2.GaussianBlur(gray, (blur_size, blur_size), 0)
+    # A broader 3% sigma smooths grid detail to estimate lighting, keep it >= 1.
     sigma = max(1.0, short_side * 0.03)
+    # (0, 0) lets OpenCV choose the background kernel size from sigma.
     background = cv2.GaussianBlur(gray, (0, 0), sigmaX=sigma)
+    # Return the illumination-normalised ratios to the 0-255 intensity range.
     gray = cv2.divide(gray, background, scale=255)
     thresh = make_threshold(gray, block_size)
 
