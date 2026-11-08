@@ -221,3 +221,6 @@ __marimo__/
 
 # Temp Files
 temp/
+
+# Results
+results/
