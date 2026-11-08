@@ -37,7 +37,7 @@ def write_json(path, result):
 
 
 def remove_predictions(outdir, name):
-    # Remove old predictions so a failed rerun cannot leave misleading outputs.
+    # clear old predictions if this run fails
     for suffix in ('grid.txt', 'rect_A3.png', 'rect_A4.png', 'rect_H4.png', 'debug.png'):
         (outdir / f'{name}_{suffix}').unlink(missing_ok=True)
 
@@ -51,7 +51,7 @@ def save_debug(path, image, prediction, conflicts):
             y = round(row * height / 9)
             right = round((column + 1) * width / 9) - 1
             bottom = round((row + 1) * height / 9) - 1
-            # OpenCV uses BGR: green for normal cells, red for conflicts, orange unread.
+            # BGR colors green for normal red for conflicts orange for unread
             color = (0, 180, 0)
             if [row, column] in conflicts:
                 color = (0, 0, 255)
@@ -62,7 +62,7 @@ def save_debug(path, image, prediction, conflicts):
             if digit:
                 cv2.putText(debug, str(digit), (x + 3, y + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
             elif [row, column] in prediction['unread_cells']:
-                # A question mark distinguishes an unread digit from an empty cell.
+                # use ? for unread digits so they dont look like empty cells
                 cv2.putText(debug, '?', (x + 3, y + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
     if not cv2.imwrite(str(path), debug):
         raise OSError(f'could not write {path}')
@@ -77,17 +77,17 @@ def process_image(path, outdir, compare=False):
         prepared = preprocess(path)
         selected, candidates = find_corners(prepared)
         selected_points = None if selected is None else selected['corners']
-        # Save the Harris response even when no suitable puzzle is found.
+        # save Harris output even if no puzzle is found
         save_harris(outdir / (path.stem + '_harris.png'), candidates, selected_points)
         if selected is None:
             result['verdict'] = 'not_found'
             remove_predictions(outdir, path.stem)
         else:
-            # Rectify the original photo using corners mapped back from detection size.
+            # map corners back to the original photo size before warping
             corners = map_points(selected['corners'], prepared['to_original'])
             images, matrices, errors = rectify(prepared['image'], corners)
-            # H4 supplies the main grid. Allow up to five seconds for its OCR,
-            # but stop by 18 seconds from the start to leave time for output files.
+            # use H4 for the main grid and give OCR up to 5 seconds
+            # cap its deadline at 18 seconds from start to leave time for saving
             prediction = recognise_cells(extract_cells(images['H4']), deadline=min(start + 18, perf_counter() + 5))
             verdict, conflicts = validate_grid(prediction['grid'])
             result['corners'] = corners.tolist()
@@ -103,9 +103,9 @@ def process_image(path, outdir, compare=False):
             result['threshold_c'] = selected['threshold_c']
             result['models'] = {'H4': prediction}
             if compare:
-                # Compare OCR on affine warps, leaving the main H4 prediction in place.
+                # also try OCR on affine warps but keep H4 as the main result
                 for model in ('A3', 'A4'):
-                    # Skip extra OCR after 16 seconds to keep the total runtime bounded.
+                    # skip extra OCR after 16 seconds to leave some time for output
                     if perf_counter() - start > 16:
                         result['models'][model] = {'error': 'OCR time budget exhausted'}
                         continue
@@ -117,7 +117,7 @@ def process_image(path, outdir, compare=False):
                         result['models'][model] = {'error': str(error)}
                 if perf_counter() - start < 16:
                     try:
-                        # Compare raw H4 crops with the normal digit preparation.
+                        # compare raw H4 cells with the prepared ones
                         raw = recognise_cells(extract_cells(images['H4']), prepare=False,
                                               deadline=min(start + 19, perf_counter() + 4))
                         result['ocr_without_preparation'] = raw['grid']
@@ -125,21 +125,21 @@ def process_image(path, outdir, compare=False):
                         result['ocr_without_preparation_error'] = str(error)
             save_rectifications(outdir, path.stem, images)
             rows = []
-            # The required text format has nine digits per row, with 0 for empty cells.
+            # save 9 digits per row and use 0 for empty cells
             for row in prediction['grid']:
                 rows.append(''.join(map(str, row)))
             (outdir / (path.stem + '_grid.txt')).write_text('\n'.join(rows) + '\n', encoding='utf-8')
             save_debug(outdir / (path.stem + '_debug.png'), images['H4'], prediction, conflicts)
     except Exception as error:
-        # Keep a failed file from stopping the rest of a batch. Software/OCR
-        # errors remain distinguishable from an actual detection failure.
+        # one bad file shouldnt stop the batch
+        # keep processing errors separate from no puzzle found
         result = {'image': path.name, 'conditions': [], 'verdict': 'error',
                   'error': f'{type(error).__name__}: {error}'}
         remove_predictions(outdir, path.stem)
     result['runtime_s'] = perf_counter() - start
     result_path = outdir / (path.stem + '_result.json')
     write_json(result_path, result)
-    # Include the first JSON write in the measured runtime.
+    # include the first JSON write in runtime too
     result['runtime_s'] = perf_counter() - start
     write_json(result_path, result)
     return result
@@ -147,7 +147,7 @@ def process_image(path, outdir, compare=False):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    # Require exactly one source: a single photograph or a batch directory.
+    # choose either one photo or a batch folder
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument('--input', type=Path)
     source.add_argument('--batch', type=Path)
@@ -163,12 +163,12 @@ def main(argv=None):
     else:
         if not args.batch.is_dir():
             parser.error('--batch must name an existing directory')
-        # Sort supported files so batches run in a repeatable order.
+        # sort files so each batch runs in the same order
         images = sorted(path for path in args.batch.iterdir()
                         if path.is_file() and path.suffix.lower() in ('.jpg', '.jpeg', '.png'))
         if not images:
             parser.error('no JPEG or PNG photographs found')
-    # Outputs use the filename stem, so duplicates would overwrite each other.
+    # same filename stem would overwrite outputs even with different extensions
     stems = [path.stem.casefold() for path in images]
     if len(stems) != len(set(stems)):
         parser.error('image filename stems must be unique')
@@ -183,7 +183,7 @@ def main(argv=None):
         except OSError as error:
             print(f'{path.name}: {error}', file=sys.stderr)
             failed = True
-    # A Sudoku conflict is a normal result; processing failures give exit code 1.
+    # conflicts are normal results only processing failures give exit code 1
     return 1 if failed else 0
 
 
